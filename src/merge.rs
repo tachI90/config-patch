@@ -1,10 +1,16 @@
 use serde_json::Value;
+use tracing;
 
 pub fn merge_all(values: &[Value], array_key: &str) -> Value {
     values
         .iter()
         .cloned()
-        .reduce(|acc, v| deep_merge(acc, v, array_key))
+        .enumerate()
+        .reduce(|(i, acc), (_, v)| {
+            tracing::debug!(source = i + 1, "Merging source into accumulated result");
+            (i + 1, deep_merge(acc, v, array_key))
+        })
+        .map(|(_, v)| v)
         .unwrap_or(Value::Object(serde_json::Map::new()))
 }
 
@@ -14,13 +20,19 @@ fn deep_merge(base: Value, overlay: Value, array_key: &str) -> Value {
             for (key, overlay_value) in overlay_map {
                 match base_map.remove(&key) {
                     Some(base_value) => {
-                        let merged = deep_merge(base_value, overlay_value, array_key);
-                        if !is_null_removal(&merged) {
+                        let merged = deep_merge(base_value, overlay_value.clone(), array_key);
+                        if is_null_removal(&merged) {
+                            tracing::debug!(key = %key, action = "REMOVE", "Null override removed key");
+                        } else {
+                            tracing::debug!(key = %key, action = "MERGE", "Key merged");
                             base_map.insert(key, merged);
                         }
                     }
                     None => {
-                        if !is_null_removal(&overlay_value) {
+                        if is_null_removal(&overlay_value) {
+                            tracing::debug!(key = %key, action = "SKIP", "Null value for non-existent key skipped");
+                        } else {
+                            tracing::debug!(key = %key, action = "ADD", "New key added");
                             base_map.insert(key, overlay_value);
                         }
                     }
@@ -42,8 +54,11 @@ fn merge_arrays(base: Vec<Value>, overlay: Vec<Value>, array_key: &str) -> Vec<V
         .any(|v| array_key_value(v, array_key).is_some());
 
     if !has_indexable {
+        tracing::debug!(array_key = %array_key, action = "REPLACE", "Array replaced - no indexable field found");
         return overlay;
     }
+
+    tracing::debug!(array_key = %array_key, action = "SMART_MERGE", "Array smart merge by key");
 
     let base_indexed: std::collections::HashMap<String, (usize, Value)> = base
         .iter()
@@ -58,9 +73,11 @@ fn merge_arrays(base: Vec<Value>, overlay: Vec<Value>, array_key: &str) -> Vec<V
         if let Some(key) = array_key_value(&overlay_item, array_key) {
             if let Some((base_idx, base_item)) = base_indexed.get(&key) {
                 matched_base_indices.insert(*base_idx);
-                let merged = deep_merge(base_item.clone(), overlay_item, array_key);
+                let merged = deep_merge(base_item.clone(), overlay_item.clone(), array_key);
+                tracing::debug!(key = %key, action = "MATCH", "Array item matched and merged");
                 result.push(merged);
             } else {
+                tracing::debug!(key = %key, action = "NEW", "Array item added from overlay");
                 result.push(overlay_item);
             }
         } else {
@@ -70,6 +87,9 @@ fn merge_arrays(base: Vec<Value>, overlay: Vec<Value>, array_key: &str) -> Vec<V
 
     for (i, base_item) in base.into_iter().enumerate() {
         if !matched_base_indices.contains(&i) {
+            if let Some(key) = array_key_value(&base_item, array_key) {
+                tracing::debug!(key = %key, action = "KEEP", "Array item preserved from base");
+            }
             result.push(base_item);
         }
     }

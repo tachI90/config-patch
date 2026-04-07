@@ -8,7 +8,7 @@ A Rust CLI tool for deep-merging configuration files across multiple sources. De
 config-patch base.json new.json local.json -o output.json
 ```
 
-Merges three config files in priority order: **Base** → **New** → **Local**. Later sources override earlier ones.
+Merges config files in priority order (first → last). Later files override earlier ones.
 
 ## Installation
 
@@ -42,17 +42,16 @@ cargo build --release
 ## Usage
 
 ```
-config-patch <BASE> <NEW> <LOCAL> -o <OUTPUT> [OPTIONS]
+config-patch <FILES...> -o <OUTPUT> [OPTIONS]
 
 Arguments:
-  <BASE>    Base configuration file (lowest priority)
-  <NEW>     New version configuration file (medium priority)
-  <LOCAL>   Local overrides configuration file (highest priority)
+  <FILES...>  Configuration files to merge (in priority order, first = lowest priority)
 
 Options:
   -o, --output <OUTPUT>    Output file path (format auto-detected from extension)
       --array-key <KEY>    Key field for smart array merging [default: name]
       --format <FORMAT>    Force output format (json, yaml, toml)
+      --debug              Enable debug logging
   -h, --help               Print help
 ```
 
@@ -61,15 +60,16 @@ Options:
 ### Priority Order
 
 ```
-Base ──┐
-       ├──► merge ──► merge ──► Output
-New  ──┘            │
-             Local ──┘
+File 1 ──┐
+File 2 ──┼──► merge ──► merge ──► ... ──► Output
+File 3 ──┘
+  ...
+File N ──┘
 ```
 
-1. Start with the **Base** file
-2. Deep-merge the **New** file on top (New overrides Base)
-3. Deep-merge the **Local** file on top (Local overrides everything)
+1. Start with the first file (lowest priority)
+2. Deep-merge each subsequent file on top
+3. Later files override earlier ones at every level
 
 ### Object Merging
 
@@ -79,7 +79,7 @@ Nested objects are merged recursively. Overlay keys override base keys at every 
 // Base
 {"database": {"host": "localhost", "port": 5432, "name": "mydb"}}
 
-// New
+// Overlay
 {"database": {"host": "db.production.internal"}}
 
 // Result
@@ -94,7 +94,7 @@ Arrays of objects are merged by a configurable key field (default: `"name"`). It
 // Base
 {"containers": [{"name": "web", "image": "web:1.0", "port": 80}]}
 
-// New
+// Overlay
 {"containers": [{"name": "web", "image": "web:2.0"}, {"name": "worker", "image": "worker:1.0"}]}
 
 // Result
@@ -107,7 +107,7 @@ Arrays of objects are merged by a configurable key field (default: `"name"`). It
 Use `--array-key` to change the matching field:
 
 ```bash
-config-patch base.json new.json local.json -o out.json --array-key id
+config-patch base.json overlay.json -o out.json --array-key id
 ```
 
 ### Primitive Arrays
@@ -118,7 +118,7 @@ Arrays of primitives (strings, numbers, booleans) are replaced entirely by the o
 // Base
 {"tags": ["v1", "stable"]}
 
-// New
+// Overlay
 {"tags": ["v2", "beta"]}
 
 // Result
@@ -133,7 +133,7 @@ A `null` value in an overlay removes that key from the output:
 // Base
 {"debug": true, "verbose": true}
 
-// Local
+// Overlay
 {"debug": null}
 
 // Result
@@ -148,7 +148,7 @@ When the same key has incompatible types, the overlay value wins:
 // Base
 {"config": "string"}
 
-// New
+// Overlay
 {"config": {"nested": "object"}}
 
 // Result
@@ -169,13 +169,44 @@ Input files can be in different formats. The output format is auto-detected from
 
 ```bash
 # JSON base + YAML overlay + TOML local → JSON output
-config-patch base.json new.yaml local.toml -o output.json
+config-patch base.json overlay.yaml local.toml -o output.json
 
 # Same inputs → YAML output
-config-patch base.json new.yaml local.toml -o output.yaml
+config-patch base.json overlay.yaml local.toml -o output.yaml
 
 # Force output format regardless of extension
-config-patch base.json new.yaml local.toml -o output.txt --format toml
+config-patch base.json overlay.yaml local.toml -o output.txt --format toml
+```
+
+## Logging
+
+### Default (INFO)
+
+Only shows high-level status:
+
+```
+INFO Merging 3 files
+INFO Merge complete input_count=3 output=out.json
+```
+
+### Debug Mode (`--debug`)
+
+Shows detailed trace of every merge operation:
+
+```
+INFO  Merging 3 files
+DEBUG Reading file file=base.json step=1 total=3
+DEBUG Parsing file file=base.json step=1 total=3
+DEBUG Merging source into accumulated result source=1
+DEBUG MERGE 'key' action="MERGE"
+DEBUG ADD   'key' action="ADD"
+DEBUG REMOVE 'key' action="REMOVE"
+DEBUG ARRAY -> replaced action="REPLACE"
+DEBUG ARRAY -> smart merge by 'name' action="SMART_MERGE"
+DEBUG   MATCH 'web' action="MATCH"
+DEBUG   NEW   'worker' action="NEW"
+DEBUG   KEEP  'sidecar' action="KEEP"
+INFO  Merge complete input_count=3 output=out.json
 ```
 
 ## Examples
@@ -261,7 +292,7 @@ config-patch base.json new.json local.json -o output.json
 ### Environment Variable Merging
 
 ```bash
-config-patch base.yaml new.yaml local.yaml -o output.yaml --array-key name
+config-patch base.yaml overlay.yaml -o output.yaml --array-key name
 ```
 
 ### Removing a Key
@@ -279,12 +310,20 @@ config-patch base.json base.json local.json -o output.json
 # Result: {"log_level": "info", "metrics": true}
 ```
 
+### Merging More Than 3 Files
+
+```bash
+config-patch defaults.json env.json team.json user.json -o output.json
+```
+
+Files are merged left to right: `defaults` → `env` → `team` → `user`, with `user.json` having the highest priority.
+
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Error (file not found, parse error, unsupported format) |
+| 1 | Error (file not found, parse error, unsupported format, insufficient files) |
 
 ## Limitations
 

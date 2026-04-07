@@ -1,6 +1,7 @@
 use clap::Parser;
 use std::path::PathBuf;
 use thiserror::Error;
+use tracing_subscriber;
 
 mod format;
 mod merge;
@@ -8,7 +9,8 @@ mod merge;
 #[derive(Parser, Debug)]
 #[command(name = "config-patch")]
 #[command(about = "Deep-merge configuration files (JSON, YAML, TOML) across multiple sources")]
-#[command(long_about = r#"config-patch merges configuration files in priority order: Base -> New -> Local.
+#[command(
+    long_about = r#"config-patch merges configuration files in priority order (first -> last).
 
 Each source file is deep-merged into the previous result, with later sources
 taking precedence. Arrays of objects are merged by a configurable key field
@@ -17,16 +19,12 @@ taking precedence. Arrays of objects are merged by a configurable key field
 Examples:
   config-patch base.json new.json local.json -o output.json
   config-patch base.yaml new.yaml local.yaml -o output.yaml --array-key id
-  config-patch base.toml new.toml local.toml -o output.json --format json"#)]
+  config-patch base.toml new.toml local.toml -o output.json --format json
+  config-patch a.json b.json c.json d.json -o merged.json --debug"#
+)]
 struct Cli {
-    /// Base configuration file (lowest priority)
-    base: PathBuf,
-
-    /// New version configuration file (medium priority)
-    new: PathBuf,
-
-    /// Local overrides configuration file (highest priority)
-    local: PathBuf,
+    /// Configuration files to merge (in priority order, first = lowest priority)
+    files: Vec<PathBuf>,
 
     /// Output file path (format auto-detected from extension)
     #[arg(short, long)]
@@ -39,6 +37,10 @@ struct Cli {
     /// Force output format (overrides file extension detection)
     #[arg(long)]
     format: Option<FormatArg>,
+
+    /// Enable debug logging
+    #[arg(long, default_value_t = false)]
+    debug: bool,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -69,25 +71,62 @@ enum ConfigPatchError {
 fn main() {
     let cli = Cli::parse();
 
+    if cli.debug {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .init();
+    }
+
     if let Err(e) = run(&cli) {
-        eprintln!("Error: {e}");
+        tracing::error!("{e}");
         std::process::exit(1);
     }
 }
 
 fn run(cli: &Cli) -> Result<(), ConfigPatchError> {
-    let base_content = std::fs::read_to_string(&cli.base)
-        .map_err(|_| ConfigPatchError::FileNotFound(cli.base.clone()))?;
-    let new_content = std::fs::read_to_string(&cli.new)
-        .map_err(|_| ConfigPatchError::FileNotFound(cli.new.clone()))?;
-    let local_content = std::fs::read_to_string(&cli.local)
-        .map_err(|_| ConfigPatchError::FileNotFound(cli.local.clone()))?;
+    if cli.files.is_empty() {
+        tracing::error!("At least one input file is required");
+        std::process::exit(1);
+    }
 
-    let base_value = format::parse(&base_content, &cli.base)?;
-    let new_value = format::parse(&new_content, &cli.new)?;
-    let local_value = format::parse(&local_content, &cli.local)?;
+    if cli.files.len() < 2 {
+        tracing::error!("At least two input files are required for merging");
+        std::process::exit(1);
+    }
 
-    let merged = merge::merge_all(&[base_value, new_value, local_value], &cli.array_key);
+    tracing::info!("Merging {} files", cli.files.len());
+
+    let mut values = Vec::new();
+
+    for (i, path) in cli.files.iter().enumerate() {
+        tracing::debug!(
+            file = %path.display(),
+            step = i + 1,
+            total = cli.files.len(),
+            "Reading file"
+        );
+        let content = std::fs::read_to_string(path)
+            .map_err(|_| ConfigPatchError::FileNotFound(path.clone()))?;
+        tracing::debug!(
+            file = %path.display(),
+            step = i + 1,
+            total = cli.files.len(),
+            "Parsing file"
+        );
+        let value = format::parse(&content, path)?;
+        values.push(value);
+    }
+
+    tracing::debug!(
+        count = values.len(),
+        array_key = %cli.array_key,
+        "Deep-merging values"
+    );
+    let merged = merge::merge_all(&values, &cli.array_key);
 
     let output_format = match cli.format {
         Some(f) => match f {
@@ -98,8 +137,16 @@ fn run(cli: &Cli) -> Result<(), ConfigPatchError> {
         None => format::detect(&cli.output)?,
     };
 
+    tracing::debug!(format = ?output_format, "Serializing output");
     let output_content = format::serialize(&merged, output_format)?;
+    tracing::debug!(output = %cli.output.display(), "Writing output");
     std::fs::write(&cli.output, output_content)?;
+
+    tracing::info!(
+        input_count = cli.files.len(),
+        output = %cli.output.display(),
+        "Merge complete"
+    );
 
     Ok(())
 }

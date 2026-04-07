@@ -396,9 +396,8 @@ fn test_help_output() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("config-patch"));
-    assert!(stdout.contains("BASE"));
-    assert!(stdout.contains("NEW"));
-    assert!(stdout.contains("LOCAL"));
+    assert!(stdout.contains("FILES"));
     assert!(stdout.contains("--output"));
     assert!(stdout.contains("--array-key"));
+    assert!(stdout.contains("--debug"));
 }
