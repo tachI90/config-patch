@@ -52,6 +52,9 @@ enum FormatArg {
 
 #[derive(Error, Debug)]
 enum ConfigPatchError {
+    #[error("Invalid arguments: {0}")]
+    InvalidArguments(String),
+
     #[error("File not found: {0}")]
     FileNotFound(PathBuf),
 
@@ -89,13 +92,15 @@ fn main() {
 
 fn run(cli: &Cli) -> Result<(), ConfigPatchError> {
     if cli.files.is_empty() {
-        tracing::error!("At least one input file is required");
-        std::process::exit(1);
+        return Err(ConfigPatchError::InvalidArguments(
+            "At least one input file is required".to_string(),
+        ));
     }
 
     if cli.files.len() < 2 {
-        tracing::error!("At least two input files are required for merging");
-        std::process::exit(1);
+        return Err(ConfigPatchError::InvalidArguments(
+            "At least two input files are required for merging".to_string(),
+        ));
     }
 
     tracing::info!("Merging {} files", cli.files.len());
