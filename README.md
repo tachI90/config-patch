@@ -24,7 +24,7 @@ Tags available:
 - `1.0` — minor release line
 - `<sha>` — commit SHA for exact reproducibility
 
-See all tags: https://github.com/tachI90/config-patch/pkgs/container/config-patch
+See all tags: https://github.com/tachi90/config-patch/pkgs/container/config-patch
 
 ### From Source
 
@@ -45,7 +45,7 @@ cargo build --release
 config-patch <FILES...> -o <OUTPUT> [OPTIONS]
 
 Arguments:
-  <FILES...>  Configuration files to merge (in priority order, first = lowest priority)
+  <FILES...>  Configuration files to merge (in priority order, first = lowest priority, minimum: 2 files)
 
 Options:
   -o, --output <OUTPUT>    Output file path (format auto-detected from extension)
@@ -162,6 +162,13 @@ When the same key has incompatible types, the overlay value wins:
 | JSON | `.json` | Full support |
 | YAML | `.yaml`, `.yml` | Single-document only |
 | TOML | `.toml` | Datetime types serialized as ISO 8601 strings |
+
+> Note: TOML output does not support `null` values. If merged output contains `null`, TOML serialization fails.
+
+## Exit Codes
+
+- `0`: Success.
+- `1`: Invalid arguments, parse errors, missing files, unsupported format, or output write failures.
 
 ### Cross-Format Merging
 

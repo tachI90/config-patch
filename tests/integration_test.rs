@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Once;
+
+static BUILD_ONCE: Once = Once::new();
 
 fn config_patch_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -11,12 +14,14 @@ fn config_patch_path() -> PathBuf {
 }
 
 fn build_binary() {
-    let status = Command::new("cargo")
-        .arg("build")
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .status()
-        .expect("Failed to build binary");
-    assert!(status.success(), "Build failed");
+    BUILD_ONCE.call_once(|| {
+        let status = Command::new("cargo")
+            .arg("build")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .status()
+            .expect("Failed to build binary");
+        assert!(status.success(), "Build failed");
+    });
 }
 
 #[test]

@@ -76,6 +76,12 @@ pub fn serialize(value: &Value, format: Format) -> Result<String, ConfigPatchErr
             })
         }
         Format::Toml => {
+            if contains_null(value) {
+                return Err(ConfigPatchError::WriteError(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "TOML output does not support null values",
+                )));
+            }
             let toml_value = json_to_toml(value);
             toml::to_string(&toml_value).map_err(|e| {
                 ConfigPatchError::WriteError(std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -157,6 +163,15 @@ fn json_to_toml(value: &Value) -> toml::Value {
     }
 }
 
+fn contains_null(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Array(items) => items.iter().any(contains_null),
+        Value::Object(map) => map.values().any(contains_null),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,7 +241,7 @@ mod tests {
     #[test]
     fn test_null_serialization_toml() {
         let value = json!({"a": null});
-        let serialized = serialize(&value, Format::Toml).unwrap();
-        assert!(serialized.contains("a = \"null\""));
+        let result = serialize(&value, Format::Toml);
+        assert!(result.is_err());
     }
 }
